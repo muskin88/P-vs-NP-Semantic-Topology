@@ -6,6 +6,7 @@
 \usepackage{times}
 \usepackage{setspace}
 \usepackage{booktabs}
+\usepackage{url}
 \geometry{a4paper, margin=1in}
 \setstretch{1.2}
 
@@ -32,10 +33,12 @@ Denis Severyanov (Bykovsky) \\
 \vspace{1em}
 
 \begin{abstract}
-We introduce \emph{Semantic Topology}—a novel framework modeling computational processes as trajectories in a Hilbert space of meaning. 
-Through large-scale experiments ($n=200$ trajectories), we demonstrate that $P$ and $NP$ problems inhabit fundamentally different topological manifolds. 
+We introduce \emph{Semantic Topology}—a novel framework modeling computational processes as trajectories in Hilbert space. 
+Through large-scale experiments (n=200 trajectories), we demonstrate that $P$ and $NP$ problems inhabit fundamentally different topological manifolds. 
 $P$-trajectories exhibit smooth, convergent dynamics ($S > 0.2$), while $NP$-trajectories show chaotic, discontinuous transitions ($S < 0.02$). 
 This geometric separation, invariant under polynomial reductions, provides both formal and empirical evidence for $P \neq NP$ with statistical significance $p < 10^{-33}$.
+
+All code and data are available at: \url{https://github.com/muskin88/P-vs-NP-Semantic-Topology}.
 \end{abstract}
 
 \section*{1. Introduction}
@@ -43,7 +46,7 @@ This geometric separation, invariant under polynomial reductions, provides both 
 The $P$ vs $NP$ problem represents one of the most profound challenges in theoretical computer science \cite{cook1971complexity, karp1972reducibility}. 
 While traditional approaches have focused on syntactic complexity measures, this paper introduces a fundamentally new perspective: \emph{Semantic Topology}.
 
-We interpret computational processes as dynamical systems evolving in a semantic Hilbert space, where each algorithm’s execution traces a continuous (or discontinuous) trajectory representing the evolution of computational meaning. 
+We interpret computational processes as dynamical systems evolving in a semantic Hilbert space, where each algorithm's execution traces a continuous (or discontinuous) trajectory representing the evolution of computational meaning. 
 This approach reveals that $P$ and $NP$ classes are not merely separated by resource constraints but by fundamental topological properties of their semantic dynamics.
 
 \section*{2. Semantic Topology Framework}
@@ -102,6 +105,13 @@ For each algorithm class:
 \item 4-dimensional feature space: normalized entropy, search width, heuristic deviation, attractor curvature
 \item Total sample size: 200 trajectories (100 P-class + 100 NP-class)
 \end{itemize}
+
+\subsection*{3.3 Reproducibility}
+
+All experimental code, data, and analysis scripts are available at:\\
+\url{https://github.com/muskin88/P-vs-NP-Semantic-Topology}
+
+The repository contains complete implementations of all algorithms, raw trajectory data, and reproduction instructions. Results can be verified with a single command: \texttt{python code/semantic\_p\_vs\_np\_experiment.py}.
 
 \section*{4. Theoretical Results}
 
@@ -210,6 +220,19 @@ We have demonstrated through both formal reasoning and large-scale empirical evi
 Extended empirical validation on 200 trajectories yields a statistically invariant curvature separation ($p<10^{-33}$), 
 confirming that semantic smoothness acts as a topological invariant distinguishing $P$ and $NP$.
 The Semantic Topology framework thus establishes a new bridge between geometry, semantics, and computational complexity.
+
+\section*{Data and Code Availability}
+
+All source code, experimental data, reproduction instructions, and supplementary materials are available at:\\
+\url{https://github.com/muskin88/P-vs-NP-Semantic-Topology}
+
+The repository includes:
+\begin{itemize}
+\item Complete implementation of the semantic topology framework
+\item Raw data from all 200 trajectory experiments
+\item Statistical analysis and visualization scripts
+\item Detailed documentation for reproduction
+\end{itemize}
 
 \section*{Acknowledgements}
 The author thanks Dr. Alexander Kaplan (Moscow State University) for his openness to interdisciplinary exploration of semantic models, 
