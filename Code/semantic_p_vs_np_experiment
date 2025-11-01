@@ -1,0 +1,328 @@
+# -*- coding: utf-8 -*-
+
+# Colab-ready: масштабный эксперимент "семантические траектории" (P vs NP)
+
+# Зависимости: numpy, scipy, scikit-learn, networkx, matplotlib, tqdm
+
+# ---------------- CONFIG ----------------
+RUNS = 50                 # число прогонов на каждый тип (увеличь, если есть время)
+SAT_NUM_VARS = 200        # >=50 по твоему запросу
+SAT_CLAUSES = 5000       # >=1000
+SAT_MAX_STEPS = 15000     # макс шагов для случайного flip-solver
+TSP_CITIES = 150          # >=50
+TSP_MAX_STEPS = 5000     # макс шагов локального поиска (swap)
+P_ARRAY_SIZE = 50000      # размер массива для бинарного поиска (увеличен для масштаба)
+G_GRAPH_NODES = 2000      # число узлов в графе BFS
+G_EDGE_PROB = 0.05       # вероятность ребра (можно увеличить)
+SEED = 42
+SAVE_RESULTS = True      # сохранить .npz и рисунки
+OUTPUT_FILENAME = "semantic_PvNP_scaled_results.npz"
+# ----------------------------------------
+
+# Install missing packages if needed (uncomment)
+# !pip install tqdm networkx scikit-learn
+
+import numpy as np
+import random
+import matplotlib.pyplot as plt
+from tqdm import trange, tqdm
+from scipy import spatial
+from sklearn.decomposition import PCA
+from scipy.stats import mannwhitneyu
+import networkx as nx
+import os
+import time
+import warnings
+warnings.filterwarnings("ignore")
+
+random.seed(SEED)
+np.random.seed(SEED)
+
+# ---------------- Core analyzer (based on your original design) ----------------
+class SemanticComplexityAnalyzer:
+    def binary_search_states(self, arr, target):
+        states = []
+        low, high = 0, len(arr) - 1
+        while low <= high:
+            mid = (low + high) // 2
+            semantic_vec = [
+                mid / len(arr),
+                (high - low) / len(arr),
+                abs(int(arr[mid]) - int(target)) / (max(arr) - min(arr) + 1e-10),
+                np.log2(high - low + 1) / np.log2(len(arr))
+            ]
+            states.append(semantic_vec)
+            if arr[mid] == target:
+                break
+            elif arr[mid] < target:
+                low = mid + 1
+            else:
+                high = mid - 1
+        return np.array(states)
+
+    def bfs_states(self, graph, start, target):
+        states = []
+        visited = set()
+        queue = [start]
+        while queue:
+            current = queue.pop(0)
+            visited.add(current)
+            semantic_vec = [
+                len(visited) / len(graph),
+                len(queue) / len(graph),
+                1 if current == target else 0,
+                float(spatial.distance.euclidean(graph.nodes[current]['pos'], graph.nodes[target]['pos'])) if 'pos' in graph.nodes[current] and 'pos' in graph.nodes[target] else 0.0
+            ]
+            states.append(semantic_vec)
+            if current == target:
+                break
+            for neighbor in graph.neighbors(current):
+                if neighbor not in visited and neighbor not in queue:
+                    queue.append(neighbor)
+        return np.array(states)
+
+    def sat_solver_states(self, clauses, num_vars, max_steps=1000):
+        # Very simple randomized local search (flip) — keeps semantics comparable to original code
+        states = []
+        assignment = np.random.choice([True, False], num_vars)
+        for step in range(max_steps):
+            satisfied = 0
+            for clause in clauses:
+                clause_satisfied = False
+                for var in clause:
+                    if var > 0 and assignment[abs(var)-1]:
+                        clause_satisfied = True
+                        break
+                    elif var < 0 and not assignment[abs(var)-1]:
+                        clause_satisfied = True
+                        break
+                if clause_satisfied:
+                    satisfied += 1
+            semantic_vec = [
+                satisfied / len(clauses),
+                step / max_steps,
+                float(np.mean(assignment)),
+                float(len(set(assignment)) / 2)
+            ]
+            states.append(semantic_vec)
+            if satisfied == len(clauses):
+                break
+            flip_var = np.random.randint(0, num_vars)
+            assignment[flip_var] = not assignment[flip_var]
+        return np.array(states)
+
+    def tsp_states(self, cities, max_steps=1000):
+        states = []
+        n = len(cities)
+        route = np.random.permutation(n)
+        def route_distance(route):
+            return sum(np.linalg.norm(cities[route[i]] - cities[route[i-1]]) for i in range(len(route)))
+        current_distance = route_distance(route)
+        for step in range(max_steps):
+            semantic_vec = [
+                current_distance / (n * 100),
+                step / max_steps,
+                len(set(route)) / n,
+                float(np.std([np.linalg.norm(cities[route[i]] - cities[route[i-1]]) for i in range(n)]))
+            ]
+            states.append(semantic_vec)
+            # swap local search
+            i, j = np.random.choice(n, 2, replace=False)
+            new_route = route.copy()
+            new_route[i], new_route[j] = new_route[j], new_route[i]
+            new_distance = route_distance(new_route)
+            if new_distance < current_distance:
+                route, current_distance = new_route, new_distance
+        return np.array(states)
+
+    def calculate_trajectory_metrics(self, trajectories):
+        metrics = []
+        for traj in trajectories:
+            if traj is None or len(traj) < 2:
+                continue
+            # smoothness = mean step length
+            diffs = np.linalg.norm(np.diff(traj, axis=0), axis=1)
+            smoothness = float(np.mean(diffs))
+            start_to_end = np.linalg.norm(traj[-1] - traj[0])
+            total_length = float(np.sum(diffs))
+            straightness = float(start_to_end / total_length) if total_length > 0 else 0.0
+            if len(traj) > 2:
+                directions = traj[1:] - traj[:-1]
+                dots = []
+                for i in range(1, len(directions)):
+                    a = directions[i-1]; b = directions[i]
+                    denom = (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10)
+                    dots.append(float(np.dot(a,b) / denom))
+                predictability = float(np.mean(dots))
+            else:
+                predictability = 0.0
+            final_stability = float(np.linalg.norm(np.std(traj[-5:], axis=0))) if len(traj) >= 5 else 0.0
+            metrics.append({
+                'smoothness': smoothness,
+                'straightness': straightness,
+                'predictability': predictability,
+                'final_stability': final_stability,
+                'length': len(traj)
+            })
+        return metrics
+
+# ---------------- Run experiments ----------------
+an = SemanticComplexityAnalyzer()
+
+p_trajectories = []
+np_trajectories = []
+
+print("Start experiments:", time.ctime())
+start_time = time.time()
+
+# P: binary search on large arrays
+print(f"\nGenerating P (binary search) runs: {RUNS}, array size={P_ARRAY_SIZE}")
+for _ in trange(RUNS, desc="P binary search"):
+    arr = np.sort(np.random.randint(0, 10**6, P_ARRAY_SIZE))
+    target = np.random.choice(arr)
+    p_trajectories.append(an.binary_search_states(arr, target))
+
+# P: BFS on bigger graphs
+print(f"\nGenerating P (BFS) runs: {RUNS}, graph nodes={G_GRAPH_NODES}, p_edge={G_EDGE_PROB}")
+for _ in trange(RUNS, desc="P BFS"):
+    # Erdos-Renyi, ensure connectivity by adding edges if necessary
+    G = nx.erdos_renyi_graph(G_GRAPH_NODES, G_EDGE_PROB, seed=random.randint(0,10**6))
+    if not nx.is_connected(G):
+        comps = list(nx.connected_components(G))
+        for i in range(len(comps)-1):
+            u = random.choice(list(comps[i])); v = random.choice(list(comps[i+1]))
+            G.add_edge(u, v)
+    for node in G.nodes:
+        G.nodes[node]['pos'] = np.random.rand(2)
+    start_node = 0
+    target_node = max(G.nodes)
+    p_trajectories.append(an.bfs_states(G, start_node, target_node))
+
+# NP: SAT with many clauses
+print(f"\nGenerating NP (SAT) runs: {RUNS}, vars={SAT_NUM_VARS}, clauses={SAT_CLAUSES}")
+for _ in trange(RUNS, desc="NP SAT"):
+    clauses = []
+    for _ in range(SAT_CLAUSES):
+        vars_idx = np.random.randint(1, SAT_NUM_VARS+1, 3)
+        signs = np.random.choice([-1,1], 3)
+        # create clause as list of ints (e.g. [3, -7, 12])
+        clause = list((signs * vars_idx).astype(int))
+        clauses.append(clause)
+    np_trajectories.append(an.sat_solver_states(clauses, SAT_NUM_VARS, max_steps=SAT_MAX_STEPS))
+
+# NP: TSP with many cities
+print(f"\nGenerating NP (TSP) runs: {RUNS}, cities={TSP_CITIES}")
+for _ in trange(RUNS, desc="NP TSP"):
+    cities = np.random.rand(TSP_CITIES, 2) * 100
+    np_trajectories.append(an.tsp_states(cities, max_steps=TSP_MAX_STEPS))
+
+elapsed = time.time() - start_time
+print(f"\nData generation completed in {elapsed/60:.2f} minutes")
+
+# ---------------- Metrics and stats ----------------
+p_metrics = an.calculate_trajectory_metrics(p_trajectories)
+np_metrics = an.calculate_trajectory_metrics(np_trajectories)
+
+def summarize(metrics):
+    import numpy as _np
+    keys = ['smoothness','straightness','predictability','final_stability','length']
+    summary = {}
+    for k in keys:
+        vals = _np.array([m[k] for m in metrics])
+        summary[k] = {'mean': float(vals.mean()), 'std': float(vals.std()), 'n': len(vals), 'vals': vals}
+    return summary
+
+p_summary = summarize(p_metrics)
+np_summary = summarize(np_metrics)
+
+print("\n--- SUMMARY (means) ---")
+print("P (combined):")
+for k,v in p_summary.items():
+    print(f"  {k}: mean={v['mean']:.6f}  std={v['std']:.6f}  n={v['n']}")
+print("\nNP (combined):")
+for k,v in np_summary.items():
+    print(f"  {k}: mean={v['mean']:.6f}  std={v['std']:.6f}  n={v['n']}")
+
+# Mann-Whitney tests
+tests = {}
+for metric in ['smoothness','straightness','predictability']:
+    stat, pval = mannwhitneyu([m[metric] for m in p_metrics], [m[metric] for m in np_metrics], alternative='two-sided')
+    tests[metric] = {'stat': float(stat), 'pval': float(pval)}
+print("\n--- Mann-Whitney tests ---")
+for k,v in tests.items():
+    print(f"{k}: stat={v['stat']:.4f}, p={v['pval']:.6g}")
+
+# ---------------- PCA viz (sample of trajectories) ----------------
+# Concatenate states for PCA
+all_states = []
+labels = []
+for traj in p_trajectories:
+    all_states.extend(traj)
+    labels.extend(['P'] * len(traj))
+for traj in np_trajectories:
+    all_states.extend(traj)
+    labels.extend(['NP'] * len(traj))
+all_states = np.array(all_states)
+pca = PCA(n_components=2)
+coords = pca.fit_transform(all_states)
+
+# split back for plotting a subset
+def split_coords(trajectories, coords, start_index=0, max_plots=8):
+    out = []
+    idx = start_index
+    for i, traj in enumerate(trajectories):
+        L = len(traj)
+        if i < max_plots:
+            out.append(coords[idx:idx+L])
+        idx += L
+    return out
+
+p_coords_plot = split_coords(p_trajectories, coords, 0, max_plots=8)
+# compute index where P ended
+p_total = sum(len(t) for t in p_trajectories)
+np_coords_plot = split_coords(np_trajectories, coords, p_total, max_plots=8)
+
+plt.figure(figsize=(14,10))
+plt.subplot(2,2,1)
+for traj in p_coords_plot:
+    plt.plot(traj[:,0], traj[:,1], color='blue', alpha=0.5)
+for traj in np_coords_plot:
+    plt.plot(traj[:,0], traj[:,1], color='red', alpha=0.5)
+plt.title("Sample PCA trajectories (P=blue, NP=red)")
+
+plt.subplot(2,2,2)
+plt.boxplot([[m['smoothness'] for m in p_metrics], [m['smoothness'] for m in np_metrics]], labels=['P','NP'])
+plt.title("Smoothness")
+
+plt.subplot(2,2,3)
+plt.boxplot([[m['straightness'] for m in p_metrics], [m['straightness'] for m in np_metrics]], labels=['P','NP'])
+plt.title("Straightness")
+
+plt.subplot(2,2,4)
+plt.boxplot([[m['predictability'] for m in p_metrics], [m['predictability'] for m in np_metrics]], labels=['P','NP'])
+plt.title("Predictability")
+
+plt.tight_layout()
+plt.show()
+
+# ---------------- Save results ----------------
+if SAVE_RESULTS:
+    out = {
+        'p_summary': p_summary,
+        'np_summary': np_summary,
+        'tests': tests,
+        'p_metrics': p_metrics,
+        'np_metrics': np_metrics,
+        'params': {
+            'RUNS': RUNS,
+            'SAT_NUM_VARS': SAT_NUM_VARS,
+            'SAT_CLAUSES': SAT_CLAUSES,
+            'TSP_CITIES': TSP_CITIES,
+            'P_ARRAY_SIZE': P_ARRAY_SIZE,
+            'G_GRAPH_NODES': G_GRAPH_NODES
+        }
+    }
+    np.savez_compressed(OUTPUT_FILENAME, **out)
+    print(f"\nSaved results to {OUTPUT_FILENAME}")
+
+print(f"\nAll done. Total elapsed: {(time.time() - start_time)/60:.2f} minutes.")
